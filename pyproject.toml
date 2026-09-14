@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "miniworlds-data"
+version = "0.1.0"
+description = "Data structure visualization worlds for miniworlds"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "miniworlds",
+]
+authors = [
+    { name = "Andreas Siebel" },
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Education",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python",
+    "Topic :: Education",
+]
+
+[tool.setuptools.packages.find]
+where = ["source"]
+
+[tool.setuptools.package-data]
+miniworlds_data = ["py.typed"]
