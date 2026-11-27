@@ -31,6 +31,7 @@ class TreeNode(Circle):
         self.border = 2
         self.border_color = (255, 255, 255, 255)
         self.is_static = True
+        self.layer = 1
         self.value: object = value
         self.left: Optional[TreeNode] = None
         self.right: Optional[TreeNode] = None
@@ -40,6 +41,7 @@ class TreeNode(Circle):
         self._label.color = TEXT_COLOR
         self._label.font_size = max(10, int(radius * 0.8))
         self._label.is_static = True
+        self._label.layer = 2
 
     @property
     def state(self) -> str:
@@ -126,23 +128,29 @@ class TreeWorld(World):
 
     def add_left(self, parent: TreeNode, value: object) -> TreeNode:
         """Add a left child to ``parent`` and return it."""
+        self._require_node(parent)
         if parent.left is not None:
             raise ValueError("left child already exists")
-        node = self._create_child(parent, value)
+        node = self._create_child(value)
         parent.left = node
         self._relayout()
         return node
 
     def add_right(self, parent: TreeNode, value: object) -> TreeNode:
         """Add a right child to ``parent`` and return it."""
+        self._require_node(parent)
         if parent.right is not None:
             raise ValueError("right child already exists")
-        node = self._create_child(parent, value)
+        node = self._create_child(value)
         parent.right = node
         self._relayout()
         return node
 
-    def _create_child(self, parent: TreeNode, value: object) -> TreeNode:
+    def _require_node(self, node: TreeNode) -> None:
+        if node.world is not self or node not in self._all_nodes:
+            raise ValueError("node does not belong to this TreeWorld")
+
+    def _create_child(self, value: object) -> TreeNode:
         node = TreeNode(value, world=self, radius=self._node_radius, color=DEFAULT_COLOR)
         self._all_nodes.append(node)
         return node
@@ -154,10 +162,13 @@ class TreeWorld(World):
             node: Node to highlight.
             state: One of ``default``, ``visited``, ``current``, ``root``.
         """
+        self._require_node(node)
         node.set_state(state)
 
     def highlight_edge(self, parent: TreeNode, child: TreeNode, visited: bool = True) -> None:
         """Color the edge between ``parent`` and ``child`` as visited/unvisited."""
+        self._require_node(parent)
+        self._require_node(child)
         for edge in self._edges:
             if self._edge_matches(edge, parent, child):
                 edge.fill_color = EDGE_VISITED_COLOR if visited else EDGE_COLOR
@@ -275,7 +286,5 @@ class TreeWorld(World):
                 edge.is_static = True
                 edge._endpoints = (node, child)  # type: ignore[attr-defined]
                 edge.layer = 0
-                node.layer = 1
-                child.layer = 1
                 self._edges.append(edge)
                 self._draw_edges(child)

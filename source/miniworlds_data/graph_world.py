@@ -31,6 +31,7 @@ class GraphNode(Circle):
         self.border = 2
         self.border_color = (255, 255, 255, 255)
         self.is_static = True
+        self.layer = 1
         self.name: str = name
         self.value: object = value
         self._state: str = "default"
@@ -39,6 +40,7 @@ class GraphNode(Circle):
         self._label.color = TEXT_COLOR
         self._label.font_size = max(10, int(radius * 0.8))
         self._label.is_static = True
+        self._label.layer = 2
 
     @property
     def state(self) -> str:
@@ -79,8 +81,6 @@ class GraphEdge(Line):
         self.source = source
         self.target = target
         self.layer = 0
-        source.layer = 1
-        target.layer = 1
 
     def refresh(self) -> None:
         self.start_position = self.source.center
@@ -123,7 +123,7 @@ class GraphWorld(World):
         self._node_radius = node_radius
         self._nodes: Dict[str, GraphNode] = {}
         self._edges: List[GraphEdge] = []
-        self._adjacency: Dict[str, set] = {}
+        self._adjacency: Dict[str, Dict[str, GraphEdge]] = {}
         self._start: Optional[str] = None
         self._target: Optional[str] = None
 
@@ -145,12 +145,12 @@ class GraphWorld(World):
         """
         if name in self._nodes:
             raise ValueError(f"node {name!r} already exists")
+        x, y = position if position is not None else (self.width / 2, self.height / 2)
         value = name if value is None else value
         node = GraphNode(name, value, world=self, radius=self._node_radius, color=DEFAULT_COLOR)
-        self._nodes[name] = node
-        self._adjacency[name] = set()
-        x, y = position if position is not None else (self.width / 2, self.height / 2)
         node.center_on(x, y)
+        self._nodes[name] = node
+        self._adjacency[name] = {}
         return node
 
     def get_node(self, name: str) -> GraphNode:
@@ -168,31 +168,33 @@ class GraphWorld(World):
             raise ValueError("cannot connect a node to itself")
         if dst.name in self._adjacency[src.name]:
             raise ValueError(f"edge {src.name}-{dst.name} already exists")
-        self._adjacency[src.name].add(dst.name)
-        self._adjacency[dst.name].add(src.name)
         edge = GraphEdge(src, dst, world=self)
+        self._adjacency[src.name][dst.name] = edge
+        self._adjacency[dst.name][src.name] = edge
         self._edges.append(edge)
         return edge
 
     def neighbors(self, node: str | GraphNode) -> List[GraphNode]:
-        """Return the neighbors of a node (unordered)."""
+        """Return the neighbors of a node in the order they were connected."""
         name = self._coerce_name(node)
         return [self._nodes[n] for n in self._adjacency[name]]
 
     def set_start(self, node: str | GraphNode) -> None:
-        """Mark a node as the search start (red)."""
+        """Mark the search start in red. A shared start and target stays blue."""
         name = self._coerce_name(node)
-        if self._start is not None and self._start != name:
-            self.get_node(self._start).set_state("default")
+        previous = self._start
         self._start = name
-        self.get_node(name).set_state("start")
+        if previous is not None and previous != name:
+            self.get_node(previous).set_state(self._endpoint_state(previous))
+        self.get_node(name).set_state(self._endpoint_state(name))
 
     def set_target(self, node: str | GraphNode) -> None:
         """Mark a node as the search target (blue)."""
         name = self._coerce_name(node)
-        if self._target is not None and self._target != name:
-            self.get_node(self._target).set_state("default")
+        previous = self._target
         self._target = name
+        if previous is not None and previous != name:
+            self.get_node(previous).set_state(self._endpoint_state(previous))
         self.get_node(name).set_state("target")
 
     def highlight(self, node: str | GraphNode, state: str = "current", color: Optional[Color] = None) -> None:
@@ -210,38 +212,47 @@ class GraphWorld(World):
         """Highlight the edge between two nodes."""
         src_name = self._coerce_name(source)
         dst_name = self._coerce_name(target)
-        for edge in self._edges:
-            names = {edge.source.name, edge.target.name}
-            if names == {src_name, dst_name}:
-                edge.set_state(state, color)
-                return
+        edge = self._adjacency[src_name].get(dst_name)
+        if edge is not None:
+            edge.set_state(state, color)
 
     def reset_colors(self) -> None:
         """Reset every node to its start/target/default state and edges to default color."""
         for name, node in self._nodes.items():
-            if name == self._start:
-                node.set_state("start")
-            elif name == self._target:
-                node.set_state("target")
-            else:
-                node.set_state("default")
+            node.set_state(self._endpoint_state(name))
         for edge in self._edges:
             edge.set_state("default")
 
     def path_edges(self, path: Iterable[str | GraphNode]) -> None:
-        """Highlight the edges along a sequence of node names/instances as a path."""
+        """Highlight the edges along a sequence of node names or instances.
+
+        Raises ``ValueError`` if consecutive nodes are not connected.
+        """
         names = [self._coerce_name(n) for n in path]
+        path_edges = []
+        for source, target in zip(names, names[1:]):
+            edge = self._adjacency[source].get(target)
+            if edge is None:
+                raise ValueError(f"no edge between {source!r} and {target!r}")
+            path_edges.append(edge)
         for edge in self._edges:
             edge.set_state("default")
-        for a, b in zip(names, names[1:]):
-            self.highlight_edge(a, b, "path")
+        for edge in path_edges:
+            edge.set_state("path")
+
+    def _endpoint_state(self, name: str) -> str:
+        if name == self._target:
+            return "target"
+        if name == self._start:
+            return "start"
+        return "default"
 
     def _coerce_node(self, node: str | GraphNode) -> GraphNode:
         if isinstance(node, GraphNode):
+            if node.world is not self or self._nodes.get(node.name) is not node:
+                raise ValueError("node does not belong to this GraphWorld")
             return node
         return self.get_node(node)
 
     def _coerce_name(self, node: str | GraphNode) -> str:
-        if isinstance(node, GraphNode):
-            return node.name
-        return node
+        return self._coerce_node(node).name

@@ -59,7 +59,7 @@ class Stepper:
         self._index: int = -1  # index of the most recently applied step
         self._frame_counter: int = 0
         self._finished: bool = False
-        self._auto_advance: bool = False
+        self._registered_worlds = set()
 
     # -- state -----------------------------------------------------------
 
@@ -81,18 +81,16 @@ class Stepper:
     @property
     def auto_advance(self) -> bool:
         """Whether the stepper advances automatically each frame."""
-        return self._auto_advance
+        return bool(self._registered_worlds)
 
     # -- single-step control --------------------------------------------
 
     def next_step(self) -> Optional[Step]:
         """Advance the algorithm by exactly one step and apply it.
 
-        Returns the applied step, or ``None`` when the algorithm is finished.
+        Returns the applied step, or ``None`` at the end of the history
+        once the generator has been exhausted.
         """
-        if self._finished:
-            return None
-
         # We already have this step in history (e.g. after stepping back).
         next_index = self._index + 1
         if next_index < len(self._history):
@@ -111,23 +109,21 @@ class Stepper:
 
         Returns the step that was undone, or ``None`` at the beginning.
 
-        Requires an ``on_reset`` callback, because steps like "swap" cannot be
-        undone in isolation.
+        Raises ``RuntimeError`` if a rewind is needed and no ``on_reset``
+        callback was provided.
         """
         if self._index < 0:
             return None
         undone = self._history[self._index]
-        self._index -= 1
-        self._replay()
+        self._rewind(self._index - 1)
         return undone
 
     def reset(self) -> None:
         """Rewind to the beginning and apply no steps.
 
-        Requires an ``on_reset`` callback.
+        Raises ``RuntimeError`` if no ``on_reset`` callback was provided.
         """
-        self._index = -1
-        self._replay()
+        self._rewind(-1)
 
     def goto(self, index: int) -> None:
         """Move to an absolute step index.
@@ -136,9 +132,8 @@ class Stepper:
         as far as the generator allows. Backward jumps require ``on_reset``.
         """
         target = max(-1, index)
-        if target <= self._index:
-            self._index = target
-            self._replay()
+        if target < self._index:
+            self._rewind(target)
             return
         while self._index < target:
             if self.next_step() is None:
@@ -153,14 +148,17 @@ class Stepper:
             world: World to register on. Defaults to the world passed at
                 construction time.
         """
-        world = world or self.world
+        world = self.world if world is None else world
         if world is None:
             raise ValueError("Stepper.run() needs a world to register the act hook")
-        self._auto_advance = True
+        if world in self._registered_worlds:
+            return
 
         @world.register
         def act(_self):
             self.on_frame()
+
+        self._registered_worlds.add(world)
 
     def on_frame(self) -> Optional[Step]:
         """Advance one step every ``frames_per_step`` frames.
@@ -192,15 +190,11 @@ class Stepper:
         if self._on_step is not None:
             self._on_step(step)
 
-    def _replay(self) -> None:
-        """Reset the visualization and re-apply every step from 0.._index.
-
-        Backward navigation is only possible when an ``on_reset`` callback is
-        provided, because forward-only steps (e.g. "swap") are not idempotent.
-        """
+    def _rewind(self, index: int) -> None:
         if self._on_reset is None:
-            return
+            raise RuntimeError("Rewinding a Stepper requires an on_reset callback")
         self._on_reset()
-        for step in self._history[: self._index + 1]:
-            if self._on_step:
-                self._on_step(step)
+        self._index = -1
+        self._frame_counter = 0
+        for _ in range(index + 1):
+            self.next_step()

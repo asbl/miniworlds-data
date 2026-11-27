@@ -1,7 +1,14 @@
+import runpy
+from pathlib import Path
+
 import pytest
 
+from miniworlds import World
 from miniworlds_data import GraphWorld, ListWorld, QueueWorld, StackWorld, Stepper, TreeWorld
+from miniworlds_data.graph_world import EDGE_COLOR, EDGE_PATH_COLOR, EDGE_VISITED_COLOR
 
+
+EXAMPLES = Path(__file__).resolve().parents[1] / "examples"
 
 pytestmark = pytest.mark.filterwarnings(
     r"ignore:\[world_name\]\.run\(\) was not found:UserWarning"
@@ -57,6 +64,14 @@ class TestListWorld:
         world.set_value(0, 99)
         assert world.values == [99, 2, 3]
         assert world.is_sorted() is False
+
+    @pytest.mark.parametrize("outlier", [-100, 100])
+    def test_restoring_values_restores_bar_heights(self, outlier):
+        world = ListWorld([1, 2, 3])
+        heights = [cell.height for cell in world._cells]
+        world.set_value(2, outlier)
+        world.set_value(2, 3)
+        assert [cell.height for cell in world._cells] == heights
 
     def test_invalid_index_raises(self):
         world = ListWorld([1, 2, 3])
@@ -204,6 +219,30 @@ class TestTreeWorld:
         assert root.left.value == 3
         assert root.right.value == 8
 
+    def test_labels_draw_above_nodes_and_edges(self):
+        world = TreeWorld()
+        root = world.set_root(5)
+        child = world.add_left(root, 3)
+        assert world._edges[0].layer < root.layer < root._label.layer
+        assert world._edges[0].layer < child.layer < child._label.layer
+
+    def test_foreign_node_cannot_be_changed(self):
+        world = TreeWorld()
+        root = world.set_root(5)
+        other = TreeWorld()
+        foreign = other.set_root(3)
+
+        with pytest.raises(ValueError, match="does not belong"):
+            world.add_left(foreign, 2)
+        with pytest.raises(ValueError, match="does not belong"):
+            world.highlight(foreign)
+        with pytest.raises(ValueError, match="does not belong"):
+            world.highlight_edge(root, foreign)
+
+        assert world.nodes == world.inorder() == [root]
+        assert other.inorder() == [foreign]
+        assert foreign.state == "root"
+
     def test_double_left_child_raises(self):
         world = TreeWorld()
         root = world.set_root(5)
@@ -333,6 +372,41 @@ class TestGraphWorld:
         assert b in world.neighbors(a)
         assert a in world.neighbors(b)
 
+    def test_neighbors_follow_connection_order(self):
+        world = GraphWorld()
+        a = world.add_node("A")
+        b = world.add_node("B")
+        c = world.add_node("C")
+        world.connect(a, c)
+        world.connect(b, a)
+        assert world.neighbors(a) == [c, b]
+
+    def test_labels_draw_above_nodes_and_edges(self):
+        world = GraphWorld()
+        a = world.add_node("A", position=(100, 100))
+        b = world.add_node("B", position=(200, 200))
+        edge = world.connect(a, b)
+        assert edge.layer < a.layer < a._label.layer
+        assert edge.layer < b.layer < b._label.layer
+
+    def test_foreign_node_with_matching_name_is_rejected(self):
+        world = GraphWorld()
+        a = world.add_node("A")
+        world.add_node("B")
+        other = GraphWorld()
+        foreign = other.add_node("A")
+
+        with pytest.raises(ValueError, match="does not belong"):
+            world.highlight(foreign)
+        with pytest.raises(ValueError, match="does not belong"):
+            world.connect(foreign, "B")
+        with pytest.raises(ValueError, match="does not belong"):
+            world.set_target(foreign)
+
+        assert a.state == foreign.state == "default"
+        assert world.neighbors(a) == []
+        assert world.edges == []
+
     def test_double_edge_raises(self):
         world = GraphWorld()
         a = world.add_node("A", position=(0, 0))
@@ -374,7 +448,6 @@ class TestGraphWorld:
         world.connect(a, b)
         world.highlight_edge(a, b, "visited")
         edge = world.edges[0]
-        from miniworlds_data.graph_world import EDGE_VISITED_COLOR
         assert edge.fill_color == EDGE_VISITED_COLOR
 
     def test_path_edges_highlights_path(self):
@@ -385,9 +458,22 @@ class TestGraphWorld:
         world.connect(a, b)
         world.connect(b, c)
         world.path_edges(["A", "B", "C"])
-        from miniworlds_data.graph_world import EDGE_PATH_COLOR
         assert world.edges[0].fill_color == EDGE_PATH_COLOR
         assert world.edges[1].fill_color == EDGE_PATH_COLOR
+
+    def test_invalid_path_preserves_edge_colors(self):
+        world = GraphWorld()
+        for name in "ABC":
+            world.add_node(name)
+        edge = world.connect("A", "B")
+        world.highlight_edge("A", "B", "visited")
+
+        with pytest.raises(ValueError, match="no edge"):
+            world.path_edges(["A", "B", "C"])
+        with pytest.raises(KeyError, match="unknown node"):
+            world.path_edges(["A", "B", "D"])
+
+        assert edge.fill_color == EDGE_VISITED_COLOR
 
     def test_reset_colors_restores_start_target(self):
         world = GraphWorld()
@@ -397,6 +483,19 @@ class TestGraphWorld:
         world.set_target(b)
         world.highlight(a, "current")
         world.reset_colors()
+        assert a.state == "start"
+        assert b.state == "target"
+
+    def test_shared_start_and_target_retains_its_role(self):
+        world = GraphWorld()
+        a = world.add_node("A")
+        b = world.add_node("B")
+        world.set_target(a)
+        world.set_start(a)
+        assert a.state == "target"
+        world.reset_colors()
+        assert a.state == "target"
+        world.set_target(b)
         assert a.state == "start"
         assert b.state == "target"
 
@@ -523,7 +622,76 @@ class TestStepper:
         assert stepper.finished is True
         assert stepper.step_index == 1
 
+    def test_replays_history_after_generator_finishes(self):
+        state = []
+        stepper = Stepper(self._count_to(2), on_step=state.append, on_reset=state.clear)
+        stepper.goto(10)
+        assert stepper.finished
+
+        stepper.prev_step()
+        assert state == [("tick", 0)]
+        assert stepper.next_step() == ("tick", 1)
+        stepper.reset()
+        assert state == []
+        stepper.goto(10)
+        assert state == stepper.steps == [("tick", 0), ("tick", 1)]
+        assert stepper.finished
+
+    def test_rewind_without_reset_callback_leaves_state_alone(self):
+        state = []
+        stepper = Stepper(self._count_to(2), on_step=state.append)
+        stepper.next_step()
+        stepper.goto(0)
+        for rewind in (stepper.prev_step, stepper.reset, lambda: stepper.goto(-1)):
+            with pytest.raises(RuntimeError, match="on_reset"):
+                rewind()
+            assert stepper.step_index == 0
+            assert state == [("tick", 0)]
+        assert stepper.next_step() == ("tick", 1)
+
+    def test_run_twice_registers_only_one_frame_hook(self):
+        world = ListWorld([1])
+        stepper = Stepper(self._count_to(3), world)
+        stepper.run()
+        stepper.run()
+        world.event_manager.act_all()
+        assert stepper.steps == [("tick", 0)]
+
     def test_run_requires_world(self):
         stepper = Stepper(self._count_to(2))
         with pytest.raises(ValueError):
             stepper.run()
+
+
+def test_bubble_sort_stepper_example_replays_the_sorted_visualization(monkeypatch):
+    monkeypatch.setattr(World, "run", lambda self: None)
+    example = runpy.run_path(str(EXAMPLES / "03_bubble_sort_stepper.py"))
+    world = example["world"]
+    stepper = example["stepper"]
+
+    for _ in range(100):
+        world.event_manager.act_all()
+    assert stepper.finished
+    assert world.values == sorted(example["initial"])
+    assert all(cell.state == "sorted" for cell in world._cells)
+
+    stepper.reset()
+    assert world.values == example["initial"]
+    stepper.goto(len(stepper.steps) - 1)
+    assert world.values == sorted(example["initial"])
+    assert all(cell.state == "sorted" for cell in world._cells)
+
+
+def test_bfs_example_highlights_one_current_node_and_the_shortest_path(monkeypatch):
+    monkeypatch.setattr(World, "run", lambda self: None)
+    example = runpy.run_path(str(EXAMPLES / "02_bfs.py"))
+    world = example["world"]
+
+    for _ in range(10):
+        world.event_manager.act_all()
+        assert sum(node.state == "current" for node in world.nodes) <= 1
+
+    assert [node.state for node in world.nodes] == ["start", "visited", "visited", "path", "target"]
+    assert [edge.fill_color for edge in world.edges] == [
+        EDGE_COLOR, EDGE_COLOR, EDGE_PATH_COLOR, EDGE_PATH_COLOR, EDGE_COLOR, EDGE_COLOR
+    ]
