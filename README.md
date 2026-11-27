@@ -7,8 +7,8 @@ sorting, traversal, pathfinding) can be shown step by step.
 The library builds everything from miniworlds worlds and actors. It does not
 load pygame sprites or expose pygame primitives.
 
-The package is intentionally kept separate from the miniworlds core package so
-it can later live in its own repository and be published on PyPI.
+The package lives in its own repository and uses miniworlds as its rendering
+engine.
 
 ## Worlds
 
@@ -61,8 +61,11 @@ stepper.run()  # advances one step per frame
 world.run()
 ```
 
-`Stepper` also supports single stepping (`next_step`), going back
-(`prev_step`, requires an `on_reset` callback), `reset`, and `goto`.
+`Stepper` also supports single stepping (`next_step`), going back (`prev_step`),
+`reset`, and `goto`. Pass an `on_reset` callback that restores the initial values
+and highlights to use `reset` or move backward. Recorded steps can be replayed
+after the generator finishes. See [Bubble Sort with the Stepper](examples/03_bubble_sort_stepper.py)
+for an example with an `on_reset` callback.
 
 ## Example: sorting
 

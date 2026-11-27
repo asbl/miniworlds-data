@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import List, Optional, Tuple
 
-from miniworlds import Number, Rectangle, Text, World
+from miniworlds import Rectangle, Text, World
 
 
 Color = Tuple[int, int, int] | Tuple[int, int, int, int]
@@ -110,8 +110,6 @@ class ListWorld(World):
         if any(not isinstance(v, (int, float)) for v in values):
             raise TypeError("ListWorld values must be int or float")
 
-        self._max_value: int | float = max(values)
-        self._min_value: int | float = min(min(values), 0)
         self._cell_width = cell_width
         self._bar_height = bar_height
         self._label_height = label_height
@@ -123,7 +121,6 @@ class ListWorld(World):
         super().__init__(width, height)
         self.background.fill_color = background
 
-        self._value_range = max(self._max_value - self._min_value, 1)
         for index, value in enumerate(values):
             self._cells.append(self._build_cell(value, index))
         self._relayout()
@@ -139,17 +136,16 @@ class ListWorld(World):
             label_height=self._label_height,
         )
 
-    def _bar_height_for_value(self, value: int | float) -> float:
-        normalized = (value - self._min_value) / self._value_range
-        return max(self._bar_height * 0.05, self._bar_height * normalized)
-
     def _relayout(self) -> None:
+        values = self.values
+        minimum = min(min(values), 0)
+        value_range = max(max(values) - minimum, 1)
         base_y = self._margin + self._bar_height
         for index, cell in enumerate(self._cells):
             x = self._margin + index * self._cell_width
-            bar_y = base_y - self._bar_height_for_value(cell.value)
-            cell.height = self._bar_height_for_value(cell.value)
-            cell.move_to_slot(x, bar_y)
+            normalized = (cell.value - minimum) / value_range
+            cell.height = self._bar_height * max(0.05, normalized)
+            cell.move_to_slot(x, base_y - cell.height)
 
     # -- read access -----------------------------------------------------
 
@@ -211,7 +207,7 @@ class ListWorld(World):
         self._validate_index(j)
         self.set_color(i, "compare")
         self.set_color(j, "compare")
-        return self.values[i] > self.values[j]
+        return self._cells[i].value > self._cells[j].value
 
     def swap(self, i: int, j: int) -> None:
         """Swap the values (and bar heights) of cells ``i`` and ``j``.
@@ -233,11 +229,6 @@ class ListWorld(World):
         if not isinstance(value, (int, float)):
             raise TypeError("value must be int or float")
         self._cells[self._validate_index(index)].set_value(value)
-        if value > self._max_value:
-            self._max_value = value
-        if value < self._min_value:
-            self._min_value = value
-        self._value_range = max(self._max_value - self._min_value, 1)
         self._relayout()
 
     def _validate_index(self, index: int) -> int:

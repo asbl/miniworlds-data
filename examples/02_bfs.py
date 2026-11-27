@@ -27,23 +27,46 @@ world.set_start(a)
 world.set_target(e)
 
 frontier = deque([a])
-visited = {a.name}
+parent = {a: None}
+current = None
+done = False
 
 
 @world.register
 def act(self):
+    global current, done
+    if done:
+        return
+    if current is not None:
+        world.highlight(current, "start" if current is a else "visited")
     if not frontier:
+        done = True
         return
+
     current = frontier.popleft()
-    world.highlight(current, "current")
     if current is e:
+        path = []
+        node = current
+        while node is not None:
+            path.append(node)
+            node = parent[node]
+        world.path_edges(reversed(path))
+        for node in path[1:-1]:
+            world.highlight(node, "path")
+        for node in frontier:
+            world.highlight(node, "default")
+        frontier.clear()
         world.highlight(current, "target")
+        done = True
         return
+
+    world.highlight(current, "current")
     for neighbor in world.neighbors(current):
-        if neighbor.name not in visited:
-            visited.add(neighbor.name)
+        if neighbor not in parent:
+            parent[neighbor] = current
             frontier.append(neighbor)
-            world.highlight(neighbor, "frontier")
+            if neighbor is not e:
+                world.highlight(neighbor, "frontier")
             world.highlight_edge(current, neighbor, "visited")
 
 
